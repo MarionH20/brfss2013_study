@@ -1,0 +1,928 @@
+---
+title: "Exploring the BRFSS data"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+    toc: true
+    toc_depth: 3
+---
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+```
+
+### Load data
+
+This study is based on the data set "brfss2013.Rdata" provided in the Coursera course "Introduction to Probability and Data with R" (Duke University). Access to the course data set is restricted, so it is not linked here.
+
+**The data file is not provided with this project.** The notebook loads a file named "brfss2013_clean.RData", which is the course data set converted to UTF-8 encoding for R versions that do not support CP1252 encoding. To reproduce this analysis, you need to build your own version of this file and save it under that name in the same folder as this notebook.
+
+The raw BRFSS data for 2013 and other years are available on the [CDC website](https://www.cdc.gov/brfss/annual_data/annual_2013.html) (U.S. Centers for Disease Control and Prevention). The modifications made between the raw data and the course data set are not documented, so no step-by-step instructions can be given. The data set must contain the BRFSS variables used in this notebook, under the names used in the code (for example `X_state`, `X_llcpwt`, `X_bmi5`, `X_educag`, `X_incomg`, `sex`, `marital`). Results obtained from a self-built file may differ slightly from those shown here.
+
+```{r load-data}
+load("brfss2013_clean.RData")
+```
+
+------------------------------------------------------------------------
+
+## Overview of statistical concepts and R methods
+
+### Statistical concepts
+
+- **Study design and generalizability:** observational study, random sampling, population of interest, sources of bias, sampling weights
+- **Causality:** association vs causation
+- **Descriptive statistics:** mean, median, standard deviation, quantiles, skewness, outliers, handling of missing values
+- **Data visualization:** distribution (histogram, boxplot), relative frequency, segmented bar charts for categorical variables
+- **Probability:** proportions as estimated probabilities, conditional probability
+- **Hypothesis testing by simulation:** inference
+- **Correlation:** Spearman's rank correlation coefficient for two numerical variables
+
+### R methods
+
+- **Data handling (`dplyr`):** `filter()`, `group_by()`, `summarise()`, `mutate()`, `count()`, `arrange()`
+- **Visualization (`ggplot2`):** `geom_bar()`, `geom_histogram()`, `geom_boxplot()`, `position = "fill"`, `labs()`, `coord_cartesian()`
+- **Summary functions:** `summary()`, `mean()`, `median()`, `sd()`, `quantile()`, `na.rm = TRUE`
+- **Simulation:** `set.seed()`, `sample()`, `replicate()`
+- **Correlation:** `cor(..., method = "spearman", use = "complete.obs")`
+
+------------------------------------------------------------------------
+
+## Part 1: Data
+
+### Data Collection:
+
+#### Overview
+
+```{r}
+dim(brfss2013_clean)
+```
+
+The data set is made of **491775 observations** and **330 variables**.
+
+```{r}
+n <- nrow(brfss2013_clean)
+```
+
+#### Generalizability:
+
+**Definition of the population of interest**
+
+Non-institutionalized adults in the USA in 2013.
+
+**Definition of the sample**
+
+Interviewers collect data from randomly selected adults in a household via landline or cellular telephone-based survey. Over 490 000 randomly chosen non-institutionalized adults are questioned, across the 50 US states and additionally in the District of Columbia, Guam, and in the Commonwealth of Puerto Rico.
+
+The number of observations is large. It is not sufficient to ensure generalizability but it is a good premise. We will now discuss the different sources of bias and conclude on generalizability of the data.
+
+**Potential sources of bias**:
+
+1.  **Non-response**:\
+
+    The questionnaire is answered on a voluntary basis.
+
+- Some categories of people in the US population may refuse more than others to participate, for instance people with impaired social contacts, cautious people not answering unknown phone numbers or population with long working hours and little free time. There is no monetary compensation offered to participate in the survey, which could potentially reduce this bias.
+- Additionally, some categories of people are known to answer surveys more willingly like women or people with a higher educational level.
+- Variables may be partially biased, people tending to under or over-estimate them, or extreme values being not answered and documented as "NA" in the questionnaire. For example: height might be overestimated, weight might be underestimated, obese adults may tend not to give any information about their weight, or people with very low or very high income do not answer the questions related to income category.
+
+**Over-representation of female observations in the data set**. One example of the non-response bias is the proportion of men and women in the observations.
+
+```{r}
+brfss2013_clean %>%
+  group_by(sex)%>%
+  summarise(prop=n()/n)
+```
+
+The sample is made of 59% of women, which is higher than in the population of interest.
+
+Retrieving the expected ratio of men/ women can be done using the weight in the data set. The variable "X_llcpwt" is the variable used to weight the observations. We first sum the variable over the complete dataset.
+
+```{r}
+weight=sum(brfss2013_clean$X_llcpwt, na.rm=TRUE)
+```
+
+We then group the observations by sex and calculate the proportional weight.
+
+```{r}
+brfss2013_clean %>%
+  group_by(sex)%>%
+  summarise(relativ_weight=sum(X_llcpwt,na.rm=TRUE)/weight)
+```
+
+Women represent rougly 51.3% of the adult population of the population of interest.
+
+- Non-English speaking people could represent a **non-random** fraction of the population not answering the questionnaire. However, the document "OVERVIEW: BRFSS 2013" states: "If a significant portion of any state’s population does not speak English, states have the option of translating the questionnaire into other languages. Currently, the CDC provides a Spanish version of the core questionnaire and optional modules. Specific wording of the Spanish version of the questionnaire may be adapted by the states to fit the needs of their Hispanic populations." We assume that this bias can be neglected in a first approach. A deeper analysis could check states where large communities with households with limited English live and how such communities were considered to perform the interview\*.
+
+*study to consider for further investigation Language Use in the United States: 2019, September 01, 2022, by Sandy Dietrich and Erik Hernandez* [Report](https://www.census.gov/library/publications/2022/acs/acs-50.html)
+
+2.  **Under-coverage**:
+
+- As the respondents were called via landline or cellular telephone, individuals that are geographically hard to access, could be contacted. On the other hand, people without phone are excluded from the study.\
+- Under-coverage of male respondents: For the interviews made via landline phone, a higher number of female respondents might be expected, assuming that women spend more time at home, or may answer more often a phone call than men in the same household. As we have seen above, the proportion of female respondents in the survey is higher than its proportion in the population of interest.
+- Under-coverage of some states: The number of interviews within each state is based on budget, meaning that states with higher budget can interview more people, independently from their population size. This can result in a bias, weighting more population from certain states compared to the others. In order to eliminate this bias, **weight variables** are provided for each observation and should be considered in the analysis of the data. Analyzing the data without considering weight may introduce bias in the results.
+
+**Example of 4 states and importance of weight variables.** Population data is provided by the website [usafacts.org](https://usafacts.org/answers/how-many-people-live-in-the-us/country/united-states/)
+
+We calculate the ratio of observations made respectively for California, Texas, Alabama and Alaska and we compare with proportion in the US population.
+
+```{r}
+brfss2013_clean %>%
+  filter(X_state %in% c("California", "Texas", "Alabama", "Alaska")) %>%
+  group_by(X_state) %>%
+  summarize(ratio=n()/n)
+```
+
+Comparison with US population:
+
+**USA Population in 2013**, ca 317 Million **Alabama population in 2013**, roughly 4.87 Million, ca 1.5% of US population **Alaska population in 2013**, roughly 0,738 Million, ca 0.2% of US population **California population in 2013**, ca 38,3 Million, ca 12.1% of US population **Texas population in 2013**, ca 26,4 Million, ca 8.5% of US population
+
+For all 4 states, the number of observation does not correspond to the share of those states in the US population. The closest figures are for the state of Alabama.
+
+```{r}
+ggplot(data=brfss2013_clean, aes(X_state))+ geom_bar() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +labs(x="US State", y="number of respondents") +labs(title="Distribution of respondents in the different states")
+```
+
+The bar chart shows that the state with the highest number of respondents is Florida.
+
+**Methodological strategy to ensure generalizability and keeping a simple approach** To reduce the complexity of the analysis, this study will not use sampling weights, despite BRFSS report recommendation.\
+Refer to [The BRFSS Data User Guide](https://www.cdc.gov/brfss/data_documentation/pdf/UserguideJune2013.pdf) To reduce error and bias, but still keeping a simple approach, we will compare within-group proportions rather than comparing absolute figures. We will evaluate our variables of interest before analyzing them, by comparing their proportion in the data set and in the population of interest. Using this strategy, we assume that our results will be generalizable.
+
+Following the described methodological strategy, we can conclude on the **generalizability of the data** on the non-institutionalized adult population. The data are not generalizable to non-adult, on institutionalized adults, or on adults living outside of the USA.
+
+#### Causality:
+
+This is not an experiment, meaning that there was no defined set-up to control any variable and no random assignment to any control or treatment group. That is why the survey cannot prove any causality. We will analyze below correlation or association between variables. Remember that correlation does not imply causality.
+
+**CONCLUSION**
+
+**This is an observational study, that does not allow causal conclusions. It is generalizable on the non-institutionalized adult population. Based on the data, we can investigate correlation between variables - not implying any causality between them.**
+
+------------------------------------------------------------------------
+
+## Part 2: Research questions
+
+Those are the three research questions we intend to answer in Part 3 via Exploratory Data Analysis:
+
+### Research question 1
+
+#### Educational level and obesity: Is the obesity rate lower among adults with a higher educational level than among the others?
+
+### Research question 2
+
+#### Income category, identification of potential explanatory variables: Is there an association between the level of income and the following variables: - educational background - Sex - race category?
+
+**Note**: The race category that respondents reported themselves in the BRFSS questionnaire, grouped according to US federal classification standards is used to answer question 2. These categories are social and administrative constructs. They have no biological basis: human genetic variation is continuous and cannot be divided into discrete races. They are used here only because they are part of the data set, and the labels are reproduced as they appear in the code book, without endorsing them. In public health research, such variables are generally treated as proxies for social, economic and historical factors (such as discrimination or access to healthcare), not as biological characteristics. The analysis is purely descriptive. Any difference observed between groups should not be interpreted as innate or causal, and no discriminatory intent is attached to this analysis.
+
+### Research question 3
+
+#### Physical activity and consumption of vegetables: Is there any association between the level of physical activity and the consumption of vegetables?
+
+------------------------------------------------------------------------
+
+## Part 3: Exploratory data analysis
+
+### Research question 1
+
+#### Is the obesity rate lower among adults with a higher educational level than among the others?
+
+Let's first analyze the variable wtkg3, calculated variable for reported weight in kilograms.
+
+```{r}
+summary(brfss2013_clean$wtkg3)
+```
+
+```{r}
+ggplot(data=brfss2013_clean, aes(x=wtkg3)) + geom_histogram(bins=40) +labs(title= "Histogram of wtkg3", subtitle = "calculated variable for reported weight in kilograms")
+```
+
+The variable wtkg3 contains 20685 NA values (no answer). The distribution is unimodal and right-skewed. The median is ca 77 kg.
+
+We now analyze the variable htm4, calculated variable for reported height in centimeters.
+
+```{r}
+ summary(brfss2013_clean$htm4)
+```
+
+```{r}
+ggplot(data=brfss2013_clean, aes(x=htm4)) + geom_histogram(bins=40) + xlim(50,250) + labs(title= "Histogram of htm4", subtitle = "calculated variable for reported height in centimeters")
+```
+
+By increasing the number of bins and zooming in between 150cm and 200cm, we can check if the distribution of htm4 is really unimodal. It could possibly be bimodal, if the heights of women and men belong to two different distributions.
+
+```{r}
+ggplot(data=brfss2013_clean, aes(x=htm4)) + geom_histogram(binwidth = 2) + xlim(150,200) + labs(title= "Histogram of htm4", subtitle = "calculated variable for reported height in centimeters, binwidth=2")
+```
+
+There is a local maximum around 178 cm, that could be the center of a second distribution, possibly the distribution of male height. However, there is no clear bimodality of the variable. We can consider this variable as unimodal.
+
+We now analyze the variable X_bmi5, calculated variable for body mass index (BMI) x100. \_BMI5 is derived from WTKG3 and HTM4 by dividing WTKG3 by HTM4². We will use X_bmi5/100 to get usual bmi values.
+
+```{r}
+summary(brfss2013_clean$X_bmi5/100)
+```
+
+```{r}
+ggplot(data=brfss2013_clean, aes(x=X_bmi5/100)) + geom_histogram(bins=40) +xlim(10, 70) + labs(title= "Histogram of X_bmi5/100", subtitle = "calculated variable for body mass index")
+```
+
+The bmi shows a unimodal, right-skewed distribution.
+
+**Educational level**
+
+Let's now explore the variable X_educag, calculated variable for level of education completed.
+
+```{r}
+ggplot(data=brfss2013_clean, aes(X_educag)) + geom_bar()+theme(axis.text.x = element_text(angle = 45, hjust = 1)) + labs(title= "Barchart of X_educag", subtitle= "calculated variable for level of education completed")
+```
+
+**Educational level and bmi index**
+
+We will visualize the relationship between X_bmi5/100 and X_educag.
+
+```{r}
+ggplot(data = brfss2013_clean, aes(x=X_educag, y=X_bmi5/100)) + geom_boxplot() + theme(axis.text = element_text(angle=45, hjust = 1))+ labs(title= "Boxplot of X_bmi5/100, depending on X_educag", subtitle= "X_bmi5=cal.variable for body mass index, X_educag= cal. variable for level of educ. completed")
+```
+
+Due to the high amount of outliers, it is difficult to compare the boxplots of the different educational levels. Let's visualize the same chart, zooming in.
+
+```{r}
+ggplot(data=brfss2013_clean, aes(x=X_educag, y=X_bmi5/100)) + geom_boxplot() +theme(axis.text.x = element_text(angle = 45, hjust = 1)) +coord_cartesian(ylim = c(10, 45))+ labs(title= "Boxplot of X_bmi5/100, depending on X_educag", subtitle= "X_bmi5=cal.variable for body mass index, X_educag= cal. variable for level of educ. completed")
+```
+
+We see on the boxplot that the median of X_bmi5/100 is decreasing with increasing educational level.
+
+We visualize now the distribution of X_bmi5/100 for respondents graduated from college or technical school".
+
+```{r}
+high_educ <- brfss2013_clean %>%
+  filter( X_educag == "Graduated from college or technical school")
+ggplot(data=high_educ, aes(x=X_bmi5/100)) + geom_histogram(bins=40) +  labs(title= "Histogram of X_bmi5/100 for Graduated from college or technical schools", subtitle= "calculated variable for body mass index")
+```
+
+```{r}
+summary(high_educ$X_bmi5/100)
+```
+
+We visualize now the distribution of X_bmi5/100 for respondents from the other categories.
+
+```{r}
+other_educ <- brfss2013_clean %>%
+  filter( X_educag != "Graduated from college or technical school")
+ggplot(data=other_educ, aes(x=X_bmi5/100)) + geom_histogram(bins=40)+  labs(title= "Histogram of X_bmi5/100 for other X_educag values", subtitle= "calculated variable for body mass index")
+```
+
+```{r}
+summary(other_educ$X_bmi5/100)
+```
+
+Both histograms have a unimodal right-skewed distribution. The median of X_bmi5/100 for the category "Graduated from college or technical school" is 25.89, whereas it is 27.34 for the other categories.
+
+Calculate the probability of an adult to be obese (X_bmi5/100 \>=30), median and average X_bmi5/100.
+
+```{r}
+brfss2013_clean %>%
+  group_by(X_educag) %>%
+  summarize(count=n(),prop_obese=mean(X_bmi5cat=="Obese", na.rm=TRUE), median_bmi= median( X_bmi5/100, na.rm=TRUE), average_bmi=mean(X_bmi5/100, na.rm=TRUE))
+```
+
+Comparison of obesity for respondents graduated from college or technical school versus other categories:
+
+```{r}
+high_educ %>%
+  summarise(prop_obese=mean(X_bmi5cat=="Obese", na.rm=TRUE))
+```
+
+```{r}
+other_educ %>%
+    summarise(prop_obese=mean(X_bmi5cat=="Obese", na.rm=TRUE))
+```
+
+```{r}
+brfss2013_clean %>%
+    summarise(prop_obese=mean(X_bmi5cat=="Obese", na.rm=TRUE))
+```
+
+The percentage of obese people in the respondents not having graduated from college or technical school is ca 32% whereas it is 23% for respondents having graduated from college or technical school. Considering the high number of observations in the data set, we conclude that the difference between the graduated from college or technical school and the rest of the population is real. Anyway, we will test the hypothesis using inference.
+
+**Inference**
+
+**H0**: The difference in the obesity rate for graduated from college or technical school compared with the other adults is random. **H1**: The difference in the obesity rate is not random between adults graduated from college or technical school and the rest of the population.
+
+We test random draws between "obese" and "other", for n=170 000 (roughly the sample size of graduated from college and technical school) and a probability of 29%. We repeat this 20 times and observe the proportion of obese people.
+
+```{r}
+set.seed(123)
+bmi_outcomes <- c("Obese", "Not obese")
+  n_obese <- replicate(20, {sim <- sample(bmi_outcomes, size = 170000, replace = TRUE, prob = c(0.29, 0.71))
+  sum(sim == "Obese")})
+
+sim_results <- data.frame(
+sim        = paste0("sim_bmi", 1:20),
+n_obese    = n_obese,
+n_total    = 170000,
+prop_obese = n_obese / 170000
+)
+```
+
+```{r}
+summary(sim_results$prop_obese)
+```
+
+```{r}
+sd(sim_results$prop_obese)
+```
+
+```{r}
+ggplot(data=sim_results, aes(x=prop_obese)) +geom_histogram(binwidth=0.0005) + xlim(0.20, 0.35) +  labs(title= "Histogram of proportion of obese in simulated results")
+```
+
+```{r}
+pnorm(0.23, mean=mean(sim_results$prop_obese), sd=sd(sim_results$prop_obese))
+```
+
+None of the 20 simulations is as low as 23%. We conclude that the difference in the obesity rate is in all likelihood not random between adults graduated from college or technical school and the rest of the population. **The population having graduated from college or technical school has a lower obesity rate than the rest of the population.**
+
+**Note:** In Part 2 / Research question 2, it will be shown that the category "having graduated from college or technical school" is over-represented in the sample. As this category has a lower obesity rate than the rest of the population, the calculated average obesity rate of 29% is probably underestimated. This does not contradict our conclusion for Research question 1 as this would increase the gap between the 23% observed for college graduates and the overall reference rate used in the test. Other imbalances like age or states could influence the overall average obesity rate in another direction.
+
+### Conclusion on Research question 1
+
+**The population having graduated from college or technical school has a lower obesity rate than the rest of the population.**
+
+### Research question 2
+
+#### Income category, identification of potential explanatory variables: Is there an association between the level of income and the following variables: - educational background - Sex - race categorization?
+
+In the survey, the respondents are asked about their "annual *household* income from all sources". In a household, the income is shared by the couple, so studying the income by sex appears weak at first sight. However, we will show differences in income values between men and women. We will then discuss hypotheses to explain it.
+
+```{r}
+brfss2013_clean %>%
+  group_by(sex)%>%
+  summarise(prop=n()/n)
+```
+
+```{r}
+ggplot(data=brfss2013_clean, aes(sex))+geom_bar() +  labs(title= "Barplot of sex")
+```
+
+59% of the respondents are women in the data set, this is higher than the actual proportion of women in the population - refer to the discussion above about sample bias.
+
+We calculate the count of men and women in the sample and store them as variables to be able to reuse them.
+
+```{r}
+prop_sex <- brfss2013_clean %>%
+  filter(!is.na(sex)) %>%
+  count(sex) %>%
+  mutate(prop = n / sum(n))
+prop_sex
+
+n_female= prop_sex$n[2]
+n_male=prop_sex$n[1]
+
+```
+
+We explore the variable X_incomg, calculated variable for income categories.
+
+Build the relative frequency bar chart of the level of income (variable X_incomg) of the sample.
+
+```{r}
+ggplot(data = brfss2013_clean, aes(x = X_incomg)) +
+  geom_bar(aes(y = after_stat(count / sum(count)))) +
+  labs(x = "Income category", y = "Relative frequency")  +
+  theme(axis.text = element_text(angle=45, hjust = 1)) + labs(title= "Barplot of X_incomg", subtitle= "calculated variable for income categories.")
+```
+
+We now compare the Income category proportions in the data set and the proportions using the weight variables.
+
+```{r}
+brfss2013_clean %>%
+  group_by(X_incomg) %>%
+  summarise(n()/n)
+```
+
+```{r}
+brfss2013_clean %>%
+  group_by(X_incomg) %>%
+  summarise(relativ_weight=sum(X_llcpwt,na.rm=TRUE)/weight)
+```
+
+Comparing the results in the sample and in the population of interest, we have roughly the same proportions.
+
+As there is a bias resulting in a higher proportion of women than men, it would be incorrect to compare absolute figures. Instead, we can compare proportions.
+
+We visualize the relative distribution of income for men and women.
+
+```{r}
+ggplot(data= brfss2013_clean, aes(x = sex, fill = X_incomg)) +
+  geom_bar(position = "fill") +
+  labs(x = "Sex", y = "Percentage within sex", fill = "Income category") +  labs(title= "Segmented Barplot of Sex, by X_incomg", subtitle= "X_incomg= calculated variable for income categories.")
+```
+
+We calculate the count and proportion of income level for male and female respondents.
+
+```{r}
+female_income <- brfss2013_clean %>%
+  filter(sex=="Female") %>%
+  group_by(X_incomg)%>%
+  summarise(count=n(), proportion=n()/n_female)
+female_income
+```
+
+```{r}
+male_income <- brfss2013_clean %>%
+  filter(sex=="Male") %>%
+  group_by(X_incomg)%>%
+  summarise(count=n(), proportion=n()/n_male)
+male_income
+```
+
+The proportion of income below \$25,000 is higher for female than male respondents. On the contrary, the proportion of income above \$35,000 is higher for male than female respondents. The level from \$25,000 to \$35,000 is comparable for both sexes.
+
+We wonder if the difference between male and female is associated with a difference in the educational level. We can assume that higher income could be related to higher educational level. So if the male population tends to have a higher educational level, they tend to have as well a higher income.
+
+We will analyze now the relationship between educational level and income level, and between Sex and educational level.
+
+**Sex versus educational level:**
+
+```{r}
+female_education <- brfss2013_clean %>%
+  filter(sex=="Female") %>%
+  group_by(X_educag)%>%
+  summarise(count=n(), proportion=n()/n_female)
+female_education
+```
+
+```{r}
+male_education <- brfss2013_clean %>%
+  filter(sex=="Male") %>%
+  group_by(X_educag)%>%
+  summarise(count=n(), proportion=n()/n_male)
+male_education
+```
+
+```{r}
+ggplot(data= brfss2013_clean, aes(x = sex, fill = X_educag)) +
+  geom_bar(position = "fill") +
+  labs(x = "Sex", y = "Percentage within sex", fill = "Educational level") +  labs(title= "Segmented Barplot of Sex, by X_educag", subtitle= "X_educag= calculated variable for level of education completed.")
+```
+
+**The educational level of male and female is quite similar.** The main difference is for the categories: "Attended college or technical school" and "Graduated from college or technical school". A higher proportion of women attended college or technical school without having graduated: 28.5% for female and 25,5% for male. There are more male having graduated college or technical school: 36,6% for male and 33,2% for female.
+
+**Educational level versus income:**
+
+```{r}
+ggplot(data= brfss2013_clean, aes(x = X_incomg, fill = X_educag)) +
+  geom_bar(position = "fill") +
+  labs(x = "Income category", y = "Percentage within income category", fill = "Educational level") + 
+  theme(axis.text.x = element_text(angle=45, hjust=1)) + labs(title= "Segmented Barplot of X_incomg by X_educag", subtitle= "X_incomg= cal. variable for income cat., X_educag= cal. variable for level of educ. completed.")
+```
+
+We see that all educational levels are present in all income categories, but the proportion of lower educational level globally decreases as the income increases. **As a result there is a correlation between income and educational level. Respondents with higher income categories tend to have higher educational level.**
+
+We will now analyze whether for the same educational level, women and men have the same income. We represent the educational level segmented by income category, first for women, then for men.
+
+We create 2 tables, filtering respectively Female and Male respondents.
+
+```{r}
+female_data <- brfss2013_clean %>%
+  filter(sex=="Female")
+male_data <-brfss2013_clean %>%
+  filter(sex=="Male")
+```
+
+```{r}
+ggplot(data= female_data, aes(x = X_educag, fill = X_incomg)) +
+  geom_bar(position = "fill") +
+  labs(x = "Educational level", y = "Percentage within educational level", fill = "Income category") + 
+  theme(axis.text.x = element_text(angle=45, hjust=1))+ labs(title= "Segmented Barplot of X_educag by X_incomg, for women", subtitle= "X_incomg= cal. variable for income cat., X_educag= cal. variable for level of educ. completed.")
+```
+
+We observe that proportion of income categories below \$25,000 is decreasing as educational level is increasing. In contrast, proportion of income categories above \$35,000 is increasing with educational level. For the income category between \$25,000 and \$35,000 there is no clear trend.
+
+```{r}
+male_data <- brfss2013_clean %>%
+  filter(sex=="Male")
+ggplot(data= male_data, aes(x = X_educag, fill = X_incomg)) +
+  geom_bar(position = "fill") +
+  labs(x = "Educational level", y = "Percentage within educational level", fill = "Income category") + 
+  theme(axis.text.x = element_text(angle=45, hjust=1)) + labs(title= "Segmented Barplot of X_educag by X_incomg, for men", subtitle= "X_incomg= cal. variable for income cat., X_educag= cal. variable for level of educ. completed.")
+```
+
+The same trends are visible for men as for women, except for the category \$25,000 to \$35,000. This decreases with higher educational level, whereas no clear trend was visible for women.
+
+As it is difficult to compare women and men based on the above graphs, we now focus on one educational level and compare both sex.
+
+```{r}
+female_data %>%
+  filter(X_educag =="Did not graduate high school") %>%
+  group_by(sex, X_incomg) %>%
+  summarise(count= n()) %>%
+  mutate(p=count/sum(count))
+```
+
+```{r}
+male_data %>%
+  filter(X_educag =="Did not graduate high school") %>%
+  group_by(sex, X_incomg) %>%
+  summarise(count= n()) %>%
+  mutate(p=count/sum(count))
+```
+
+```{r}
+no_highschool <- brfss2013_clean %>%
+  filter(X_educag =="Did not graduate high school", !is.na(sex))
+ggplot(data=no_highschool, aes(x=sex, fill=X_incomg))+
+  geom_bar(position = "fill") +
+  labs(x="Sex", y="percentage within sex", fill= "Income category", title = "Segmented Barplot sex by X_incomg for respondents not grad. from High School",subtitle= "X_incomg= calculated variable for income category" )+
+  theme(axis.text.x = element_text(angle=45, hjust=1)) 
+  
+```
+
+Among respondents without high school degree, the proportion of women in income category less than \$ 15,000 is higher than for men. On the contrary, there is a higher proportion of men with salaries higher than \$25,000. We should note as well that there is a high proportion of "NA" entry for men and women, which can bias the observations.
+
+```{r}
+high_degree <- brfss2013_clean %>%
+  filter(X_educag =="Graduated from college or technical school", !is.na(sex))
+ggplot(data=high_degree, aes(x=sex, fill=X_incomg))+
+  geom_bar(position = "fill") +
+  labs(x="Sex", y="percentage within sex", fill= "Income category", title = "Segmented Barplot sex by X_incomg for respondents grad. from college (...)",subtitle= "X_incomg= calculated variable for income category" ) +
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+```
+
+In the population graduated from college or technical school, the percentage of respondents with income less than \$15,000 is higher for women than men. On the contrary, the percentage of income above \$50,000 is higher for men than for women.
+
+The proportion of the sample may not be representative of the population of interest - refer to the discussion above about potential bias. For instance, we may assume that people with higher educational degree are over-represented in our data which can bias our analysis.
+
+In order to estimate the correctness of our analysis, we will compare one bar chart used above, with one bar chart built with the weight variable X_llcpwt.
+
+```{r}
+brfss2013_clean %>%
+  filter(!is.na(X_incomg)) %>%
+  ggplot(aes(x = X_incomg, weight = X_llcpwt)) +
+  geom_bar(aes(y = after_stat(count / sum(count)))) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Income category", y = "Percentage of adults",  title = "Barplot of X_incomg weighted by X_llcpwt",subtitle= "X_incomg= calculated variable for income category, X_llcpwt= weight variable" ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+```{r}
+brfss2013_clean %>%
+  filter(!is.na(X_incomg)) %>%
+  ggplot(aes(x = X_incomg)) +
+  geom_bar(aes(y = after_stat(count / sum(count)))) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Income category", y = "Percentage of adults", title= "Barplot of X_incomg", subtitle="calculated variable for income category") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+The distribution of Income category in the sample and in the population of interest is quite similar. This variable can be analyzed without weighting it.
+
+```{r}
+brfss2013_clean %>%
+  filter(!is.na(sex)) %>%
+  ggplot(aes(x = sex, weight = X_llcpwt)) +
+  geom_bar(aes(y = after_stat(count / sum(count)))) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Sex", y = "Percentage of adults", title="Barplot of sex with weight variable X_llcpwt, 'na' respondents excluded") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+brfss2013_clean %>%
+  filter(!is.na(sex)) %>%
+  ggplot(aes(x = sex)) +
+  geom_bar(aes(y = after_stat(count / sum(count)))) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Sex", y = "Percentage of adults", title="Barplot of sex, non-weighted, 'na' respondents excluded") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Male category is under-represented as discussed in part 1. We see a clear difference between the charts with and without weight variable. As we have compared within-group proportions rather than comparing absolute figures, we consider our analysis valid.
+
+```{r}
+brfss2013_clean %>%
+  filter(!is.na(X_educag)) %>%
+  ggplot(aes(x = X_educag, weight = X_llcpwt)) +
+  geom_bar(aes(y = after_stat(count / sum(count)))) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Educational level", y = "Percentage of adults" , title="Barplot of X_educag with weight variable X_llcpwt", subtitle = "X_educag= calculated variable for level of education completed.") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+brfss2013_clean %>%
+  filter(! is.na(X_educag)) %>%
+  ggplot(aes(x = X_educag)) +
+  geom_bar(aes(y = after_stat(count / sum(count)))) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Educational level", y = "Percentage of adults", title="Barplot of X_educag non-weighted", subtitle = "X_educag= calculated variable for level of education completed.") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Without the weight variable, the categories “Did not graduate high school” and “Graduated high school” appear under-represented in the sample, while “Attended college or technical school” and “Graduated from college or technical school” appear over-represented. Comparisons made within an educational level (for example income by sex, or income by race, for a given level) are not affected by this imbalance. Statements about the educational mix itself, such as the education distribution by income category, remain valid in direction but overstate the share of higher education.
+
+**To conclude, for the lowest (not graduated from high school) and highest educational level (graduated from college or technical school), men tend to have a higher income than women.**
+
+Let's calculate the probability of a man and of a woman to have an income above \$50,000 given that they did not graduated from high school.
+
+We calculate P(Income\>50,000 \| Not graduated from High school), for a respondent of the survey (from any sex)
+
+```{r}
+no_hs_income <- brfss2013_clean %>%
+  filter(!is.na(X_incomg)) %>%
+  filter(X_educag =="Did not graduate high school") %>%
+  group_by(X_incomg) %>%
+  summarise(count=n()) %>%
+  mutate(p=count/sum(count))
+
+no_hs_income 
+```
+
+We now calculate P(Income\>50,000 \| Not graduated from High school), for a man
+
+```{r}
+male_no_hs_income <-brfss2013_clean %>%
+  filter(!is.na(X_incomg)) %>%
+  filter(X_educag =="Did not graduate high school", sex=="Male") %>%
+  group_by(X_incomg) %>%
+  summarise(count=n()) %>%
+  mutate(p=count/sum(count))
+male_no_hs_income
+```
+
+We now calculate P(Income\>50,000 \| Not graduated from High school), for a woman
+
+```{r}
+female_no_hs_income <- brfss2013_clean %>%
+  filter(X_educag =="Did not graduate high school", sex=="Female") %>%
+  filter(!is.na(X_incomg)) %>%
+  group_by(X_incomg) %>%
+  summarise(count=n()) %>%
+  mutate(p=count/sum(count))
+
+female_no_hs_income
+```
+
+```{r}
+p_female_no_hs_50= female_no_hs_income$p[female_no_hs_income$X_incomg == "$50,000 or more"]
+p_male_no_hs_50= male_no_hs_income$p[male_no_hs_income$X_incomg == "$50,000 or more"]
+p_no_hs_50= no_hs_income$p[no_hs_income$X_incomg == "$50,000 or more"]
+
+print("Probability of income above $50,000 for respondents not graduated from high school")
+cat("female respondents:",
+    round(p_female_no_hs_50, 4), "\n")
+cat("male respondents:", 
+    round(p_male_no_hs_50, 4), "\n")
+cat("respondents - all genders:", 
+    round(p_no_hs_50, 4), "\n")
+
+```
+
+We see a clear difference in the probabilities for female and male respondents, men having a higher probability of having an income above \$50,000; given that they have not graduated from high school.
+
+**Discussion: why should household income differ by sex?**
+
+As discussed above, the income registered in the study in not an individual income but a household income. Let's formulate some hypotheses to explain why income category results are different between men and women.
+
+- Women could tend to underestimate their household income and men could tend to overestimate it. We will test this hypothesis. If you assume that in married couple, women and men report the same household income, when selecting married respondents, we should not find any difference between women and men. Even if married couples also include same-sex married couple, we assume that the number of same-sex married couple was low in 2013, so that our test is mostly valid.
+
+Marital status is defined in the variable marital:
+
+```{r}
+brfss2013_clean %>%
+  filter(marital=="Married", !is.na(sex), ! is.na(X_incomg)) %>%
+  ggplot(aes(x=sex, fill=X_incomg))+
+  geom_bar(position = "fill")+ labs(x = "Sex", y = "Proportion", title="Barplot of Sex by X_incomg", subtitle = "X_incomg= calculated variable for income category")
+```
+
+The variable X_incomg is similar between Male and Female for married respondents. The income category \$50,000 or more is a bit higher for men but does not reflect the differences identified previously considering the whole data set. As a result, women and men report similar household income, so we can reject our hypothesis.
+
+- The difference could be explained by household with single mothers. Women are more often single parents and single mothers that typically have lower incomes than couples or households with single men.
+- It could be also explained by widowhood. As women live longer, we will find a larger number of older women living alone on a single pension than older men.
+
+We will explore both hypotheses by visualizing Income depending on marital status, for both sex.
+
+```{r}
+brfss2013_clean %>%
+  filter(sex=="Female", !is.na(X_incomg), !is.na(marital)) %>%
+  ggplot(aes(x=marital, fill=X_incomg))+
+  geom_bar(position = "fill") +theme(axis.text.x = element_text(angle=45, hjust=1) )+ labs(x = "Marital status", y = "Proportion", title="Barplot of Marital by X_incomg, female respondents", subtitle = "X_incomg= calculated variable for income category")
+  
+```
+
+```{r}
+brfss2013_clean %>%
+  filter(sex=="Male", !is.na(X_incomg), !is.na(marital)) %>%
+  ggplot(aes(x=marital, fill=X_incomg))+
+  geom_bar(position = "fill") +theme(axis.text.x = element_text(angle=45, hjust=1) )+ labs(x = "Marital status", y = "Proportion", title="Barplot of Marital by X_incomg, Male respondents", subtitle = "X_incomg= calculated variable for income category")
+```
+
+Comparing the two graphs, we see that the income for marital status "married", "never married" or "a member of an unmarried couple" is similar between women and men. In the categories "Divorced", "Widowed" and "separated", income is higher for men than for women.
+
+\*\* As a result, there is a correlation between sex and income level, for respondents with marital status "Divorced", "Widowed" and "separated". Male respondents from those categories tend to have higher income\*\*.
+
+**Level of income and race categorization**
+
+We now explore the variable \_mrace1, calculated variable for multiracial race categorization.
+
+Build the relative frequency bar chart of the demographics variable (variable \_MRACE1) of the sample.
+
+```{r}
+brfss2013_clean %>%
+  filter(!is.na(X_mrace1)) %>%
+  ggplot(aes(x = X_mrace1)) +
+  geom_bar(aes(y = after_stat(count / sum(count)))) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Race categorization", y = "Percentage of adults", title= "Barplot of X_mrace1", subtitle = "Calculated variable for calculated multiracial race categorization") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Build the relative frequency bar chart of the demographics variable (variable \_MRACE1) in the population of interest.
+
+```{r}
+brfss2013_clean %>%
+  filter(!is.na(X_mrace1)) %>%
+  ggplot(aes(x = X_mrace1, weight = X_llcpwt)) +
+  geom_bar(aes(y = after_stat(count / sum(count)))) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Race categorization", y = "Percentage of adults", title= "Barplot of X_mrace1 with weight variable X_llcpwt", subtitle = "Calculated variable for multiracial race categorization") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+brfss2013_clean %>%
+  group_by(X_mrace1) %>%
+  summarise(count=n()) %>%
+  mutate(prop=count/sum(count))
+```
+
+In the sample, the race category "white" has a much higher proportion (ca 81%) than in the population of interest. So we will compare relative proportions between the categories of the variable "X_mrace1" to be able to generalize the results.
+
+```{r}
+brfss2013_clean %>%
+  filter(!is.na(X_mrace1)) %>%
+  ggplot(aes(x=X_mrace1, fill=X_incomg)) +
+  geom_bar(position="fill") +
+  labs(x="Race categorization", y="percentage within race categorization", fill= "Income Category", title = "Segmented barplot X_mrace1 by X_Incomg", subtitle= "X_mrace1: calc. var. for multiracial race categorization, X_Incomg: calc. var. for income category")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+
+```
+
+We observe that the distribution of income category is different depending on race categorization. The proportion of Income category below \$15,000 is lower for "White" and "Asian" categories. The proportion of income category above \$50,000 is higher for "White" and "Asian" categories.
+
+We select the categories "White" and "Black or African American" to analyze the differences. Those are the two population with the highest number of observations, which strengthens the robustness of the analysis.
+
+```{r}
+brfss2013_clean %>%
+  filter(X_mrace1 == "White" | X_mrace1 =="Black or African American")%>%
+  ggplot(aes(x=X_mrace1, fill=X_incomg)) +
+  geom_bar(position="fill") +
+  labs(x="Race categorization", y="percentage within race categorization", fill= "Income Category", title = "Segmented barplot X_mrace1 by X_Incomg", subtitle= "X_mrace1: calc. var. for multiracial race categorization, X_Incomg: calc. var. for income category")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+```
+
+The distribution of the income is different depending on the race categorization "White" or "Black or African American". The category "Black or African American" have Income category "Less than \$15,000" and "\$15,000 to less than \$25,000" higher than in the category "White". On the contrary, The proportion of the Income categories "\$35,000 to less than \$50,000" and "\$50,000 or more" are higher in the category "White", than in the category "Black or African American".
+
+```{r}
+brfss2013_clean %>%
+  filter(X_mrace1 == "White" | X_mrace1 =="Black or African American")%>%
+  ggplot(aes(x=X_mrace1, fill=X_educag)) +
+  geom_bar(position="fill") +
+  labs(x="multiracial race categorization", y="percentage within race categorization", fill= "Educational level", title = "Segmented barplot X_mrace1 by X_educag", subtitle= "X_mrace1: calc. var. for multiracial race categ., X_educag: calc. var. for level of educ. completed")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+```
+
+The category "Black or African American" have a higher proportion in the category "Did not graduate high school" than the category "white". On the contrary, The proportion of the Educational level category "Graduated from college or technical school" is higher in the category "White", than in the category "Black or African American".
+
+```{r}
+brfss2013_clean %>%
+  filter(X_educag =="Graduated from college or technical school", (X_mrace1== "White" | X_mrace1 =="Black or African American"))%>%
+  ggplot(aes(x=X_mrace1, fill=X_incomg))+
+  geom_bar(position = "fill") +
+  labs(x="multiracial race categorization", y="percentage within race categorization", fill= "Income category", title = "Segmented barplot X_mrace1 by X_incomg for respondents grad. from college (...) ", subtitle= "X_mrace1: calc. var. for multiracial race categ., X_incomg: calc. var. for income cat.")+
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+```
+
+Visualizing only the category "Graduated from college or technical school", we observe that the category "White" has higher Income category than the category Black or African American".
+
+**To conclude, we observe that for a similar educational level, the category "White" tends to have a higher income than the category "Black or African American".**
+
+### Conclusion on Research question 2
+
+**- Respondents with higher income categories tend to have higher educational level.\
+- For the lowest (not graduated from high school) and highest educational level (graduated from college or technical school), men tend to have a higher income than women.\
+- For respondents with marital status "Divorced", "Widowed" and "separated", male respondents from those categories tend to have higher income.\
+- For a similar educational level, the category "White" tends to have a higher income than the category "Black or African American".**
+
+### Research question 3
+
+#### Physical activity and consumption of vegetables: Is there any association between the level of physical activity and the consumption of vegetables?
+
+We visualize now the variable X_VEGLT1, calculated variable for consume vegetables 1 or more times per day.
+
+```{r}
+ggplot(data=brfss2013_clean, aes(X_veglt1))+geom_bar() +theme(axis.text.x = element_text(angle=45, hjust=1) )+ labs(x = "vegetables consumption frequency", y = "Count", title="Barplot of X_veglt1", subtitle = "X_veglt1= calculated variable for consume vegetables 1 or more times per day")
+```
+
+We visualize the variable X_vegesum, calculated variable for total vegetables consumed per day.
+
+```{r}
+ggplot(data=brfss2013_clean, aes(x=X_vegesum)) + geom_histogram(binwidth = 50) + xlim(0,1500) + labs(x = "vegetables comsuption quantity", y = "Count", title="Histogram of X_vegesum", subtitle = "X_vegesum= calculated variable for total vegetables consumed per day")
+```
+
+The distribution is unimodal, right-skewed with outliers on the right side. On the left side, the natural limit of the distribution is 0, corresponding to no vegetables consumption.
+
+Let's describe the variable with a boxplot.
+
+```{r}
+ggplot(data=brfss2013_clean, aes(y=X_vegesum/100)) + geom_boxplot() +coord_cartesian(ylim = c(0,50))+ labs(title="Boxplot of X_vegesum/100", subtitle = "X_vegesum = calculated variable for total vegetables consumed per day")
+```
+
+We notice a large amount of outliers, with high values potentially not plausible.
+
+```{r}
+summary(brfss2013_clean$X_vegesum/100)
+```
+
+```{r}
+quantile(brfss2013_clean$X_vegesum/100, 0.99, na.rm = TRUE)
+```
+
+Less than 1% of the data are above 657 (or 6.57 times vegetables a day). The maximal value of 198 seems implausible. For this reason we will limit the variable to the 99th percentile in the charts.
+
+```{r}
+ggplot(data=brfss2013_clean , aes(y=X_vegesum /100)) + geom_boxplot() +coord_cartesian(ylim = c(0, 6.57))+ labs(title="Boxplot of X_vegesum/100", subtitle = "X_vegesum = calculated variable for total vegetables consumed per day")
+```
+
+We now explore the variable PA1MIN\_ , calculated variable for minutes of total physical activity per week.
+
+```{r}
+summary(brfss2013_clean$pa1min_)
+```
+
+```{r}
+quantile(brfss2013_clean$pa1min_, 0.99, na.rm = TRUE)
+```
+
+Less than 1% of the data are above 3360 minutes of weekly activity.
+
+```{r}
+ggplot(data=brfss2013_clean, aes(y=pa1min_)) + geom_boxplot() + coord_cartesian(ylim = c(0,3360)) + labs(title= "Boxplot of pa1min", subtitle= "Calculated variable for minutes of total physical activity per week. ")
+```
+
+We would like to know if the consumption of vegetables and the physical activity are correlated. We choose the Spearman correlation model, which correlates ranks instead and may adapt better to data with outliers.
+
+```{r}
+cor(brfss2013_clean$pa1min_, brfss2013_clean$X_vegesum, use = "complete.obs", method = "spearman")
+```
+
+The Spearman's rank correlation coefficient "rho" indicates a weak positive correlation between pa1min\_ and X_vegesum.
+
+We further analyze whether there is a association between vegetables consumption and physical activity using the category variable X_VEGLT1, calculated variable for consuming vegetables 1 or more times per day.
+
+```{r}
+summary(brfss2013_clean$X_veglt1)
+```
+
+We visualise the boxplot of physical activity grouped by category of vegetables consumption X_veglt1, Calculated variable for consuming vegetables 1 or more times per day.
+
+```{r}
+ggplot(data=brfss2013_clean, aes(x=X_veglt1, y=pa1min_)) + geom_boxplot() +theme(axis.text.x = element_text(angle = 45, hjust = 1))+ coord_cartesian(ylim = c(0,2000)) + labs(x="vegetables consumption frequency", y="physical activity", title= "Boxplot of pa1min by X_veglt1", subtitle= "pa1min= calc. var. minutes phys. activity /week, X_veglt1= calc. var. for 1 or + vegetables /day")
+```
+
+On the graph we see that the median physical activity of the respondents consuming vegetables one or more times per day is higher than that of respondents consuming vegetables less than one time per day.
+
+```{r}
+brfss2013_clean %>%
+  filter(!is.na(X_veglt1)) %>%
+  group_by(X_veglt1) %>%
+  summarise(median_activity= median(pa1min_,na.rm = TRUE), mean_activity=mean(pa1min_, na.rm=TRUE))
+```
+
+This observation is confirmed calculating median and mean metrics for both categories. Median physical activity for category "Consumed vegetables one or more times per day" is 256 minutes / week, whereas median for category "Consumed vegetables less than one time per day" is 180 minutes/ week.
+
+## Conclusion on Research question 3
+
+**A higher consumption of vegetables is weakly associated with a higher physical activity.**
+
+------------------------------------------------------------------------
+
+## Package versions
+
+```{r}
+sessionInfo()
+```
+
+------------------------------------------------------------------------
+
+#### Author
+
+**Marion HOULIERE**
