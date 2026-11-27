@@ -17,10 +17,11 @@ brfss2013_study/
 ├── LICENSE.md
 ├── README.md
 ├── brfss2013_study.Rmd      (analysis: code and text)
-└── brfss2013_study.html     (rendered report)
+└── docs/
+    └── index.html      (the knitted report)
 ```
 
-Open `brfss2013_study.html` to read the report. The data file is not included (see below).
+Open [`index.html`](https://marionh20.github.io/brfss2013_study/) to read the report. The data file is not included (see below).
 
 ## Research Questions
 
